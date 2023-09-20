@@ -1,0 +1,8 @@
+:80 {
+	root * /var/www/html
+	file_server
+	try_files {path} /index.htm
+
+	header /assets/* Cache-Control max-age=31536000
+	header ?Cache-Control max-age=3600
+}
