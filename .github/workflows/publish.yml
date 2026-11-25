@@ -1,0 +1,61 @@
+name: Build and publish container
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build container
+        env:
+          IMAGE: ghcr.io/keroosha/superbitok-tg-landing
+        run: docker build --tag "$IMAGE:$GITHUB_SHA" .
+
+      - name: Verify container HTTP behavior
+        env:
+          IMAGE: ghcr.io/keroosha/superbitok-tg-landing
+        run: |
+          set -eu
+          container_id=$(docker run --detach --publish 127.0.0.1:8080:8080 "$IMAGE:$GITHUB_SHA")
+          trap 'docker rm --force "$container_id" >/dev/null' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:8080/ -o /dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Container did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl --silent --show-error --fail http://127.0.0.1:8080/ | cmp - index.htm
+          curl --silent --show-error --fail http://127.0.0.1:8080/index.htm | cmp - index.htm
+          curl --silent --show-error --fail http://127.0.0.1:8080/index_files/image008.jpg | cmp - index_files/image008.jpg
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/does-not-exist)
+          test "$status" = 404
+
+          uid=$(docker exec "$container_id" id -u)
+          gid=$(docker exec "$container_id" id -g)
+          test "$uid:$gid" = 65532:65532
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish commit-tagged image
+        env:
+          IMAGE: ghcr.io/keroosha/superbitok-tg-landing
+        run: docker push "$IMAGE:$GITHUB_SHA"
